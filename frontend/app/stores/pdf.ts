@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import type { FileInfo } from '../../../backend/src/types/index';
+import type { FileInfo } from '../types/index';
 
 export const usePdfStore = defineStore('pdf', {
   state: () => ({

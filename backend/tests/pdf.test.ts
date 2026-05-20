@@ -1,7 +1,7 @@
-import { expect, test, describe, beforeEach } from 'bun:test';
+import { expect, test, describe, beforeEach, afterAll } from 'bun:test';
 import { PdfService } from '../src/services/pdf.service.js';
 import { LocalStorageService } from '../src/services/storage.service.js';
-import { writeFileSync, mkdirSync, rmDirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 describe('PdfService', () => {
@@ -14,7 +14,6 @@ describe('PdfService', () => {
       mkdirSync(testDir, { recursive: true });
     }
     storage = new LocalStorageService();
-    // Override internal dir for testing
     (storage as any).uploadDir = testDir;
     pdfService = new PdfService(storage);
   });
@@ -26,13 +25,15 @@ describe('PdfService', () => {
   });
 
   test('should handle corrupted or unsupported buffers gracefully', async () => {
-    // Create a dummy file that isn't a PDF or Image
     const id = 'test-corrupt';
     writeFileSync(path.join(testDir, `${id}.bin`), Buffer.from('not a pdf or image'));
     
     const buffer = await pdfService.generatePdf([id]);
     expect(buffer).toBeInstanceOf(Buffer);
     expect(buffer.subarray(0, 4).toString()).toBe('%PDF');
-    // The PDF should be empty but valid
+  });
+
+  afterAll(() => {
+    rmSync(testDir, { recursive: true, force: true });
   });
 });

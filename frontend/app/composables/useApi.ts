@@ -10,13 +10,19 @@ export const useApi = () => {
       method: 'POST',
       body: formData,
     });
-    if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(`Upload failed: ${errorData.error || res.statusText}`);
+    }
     return res.json();
   }
 
   async function getFiles(sessionId: string) {
     const res = await fetch(`${baseUrl}/files?sessionId=${sessionId}`);
-    if (!res.ok) throw new Error(`Fetch failed: ${res.statusText}`);
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(`Fetch failed: ${errorData.error || res.statusText}`);
+    }
     return res.json();
   }
 
@@ -26,7 +32,10 @@ export const useApi = () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, fileIds }),
     });
-    if (!res.ok) throw new Error(`Update failed: ${res.statusText}`);
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(`Update failed: ${errorData.error || res.statusText}`);
+    }
     return res.json();
   }
 

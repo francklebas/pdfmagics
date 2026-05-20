@@ -53,6 +53,10 @@ app.put('/order', async (c) => {
   if (!sessionId || !VALID_SESSION_ID_REGEX.test(sessionId)) {
     return c.json({ error: 'Invalid sessionId' }, 400);
   }
+
+  if (!Array.isArray(fileIds) || !fileIds.every(id => typeof id === 'string' && VALID_SESSION_ID_REGEX.test(id))) {
+    return c.json({ error: 'Invalid fileIds. Must be an array of UUIDs.' }, 400);
+  }
   
   await order.updateOrder(sessionId, fileIds);
   return c.json({ success: true });
