@@ -9,3 +9,5 @@ export interface FileInfo {
 export interface SessionState {
   fileIds: string[];
 }
+
+export const VALID_SESSION_ID_REGEX = /^[0-9a-f-]{36}$/;

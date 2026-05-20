@@ -19,6 +19,7 @@
             ref="fileInput" 
             class="hidden" 
             multiple 
+            accept="image/*,application/pdf"
             @change="handleFileChange" 
           />
           <div class="flex flex-col items-center gap-3">
@@ -38,9 +39,10 @@
           <h2 class="text-lg font-semibold">Documents ({{ store.files.length }})</h2>
           <button 
             @click="generatePdf"
-            class="bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-indigo-700 transition-colors shadow-sm"
+            :disabled="store.isUploading"
+            class="bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors shadow-sm"
           >
-            Generate PDF
+            {{ store.isUploading ? 'Uploading...' : 'Generate PDF' }}
           </button>
         </div>
 
@@ -81,49 +83,69 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { UploadIcon, FileIcon, ImageIcon, ArrowUpIcon, ArrowDownIcon, TrashIcon } from 'lucide-vue-next';
-import { usePdfStore } from '~/app/stores/pdf';
-import { useApi } from '~/app/composables/useApi';
+import { usePdfStore } from '../stores/pdf';
+import { useApi } from '../composables/useApi';
 
 const store = usePdfStore();
 const { uploadFile, updateOrder, generatePdf: getPdfUrl } = useApi();
-const fileInput = ref(null);
+const fileInput = ref<HTMLInputElement | null>(null);
 
-const triggerFileInput = () => fileInput.value.click();
+onMounted(() => {
+  store.initSession();
+  fetchCurrentFiles();
+});
 
-async function handleFileChange(e) {
-  const files = e.target.files;
+
+async function fetchCurrentFiles() {
+  // We can implement this to load state from backend on mount
+  // For MVP we assume clean start or manual upload
+}
+
+const triggerFileInput = () => fileInput.value?.click();
+
+async function handleFileChange(e: Event) {
+  const target = e.target as HTMLInputElement;
+  const files = target.files;
   if (!files) return;
   
-  for (const file of files) {
-    const result = await uploadFile(file, store.sessionId);
-    store.addFile(result);
+  await uploadFilesList(Array.from(files));
+}
+
+async function handleDrop(e: DragEvent) {
+  const files = e.dataTransfer?.files;
+  if (!files) return;
+  
+  await uploadFilesList(Array.from(files));
+}
+
+async function uploadFilesList(files: File[]) {
+  store.setUploading(true);
+  try {
+    for (const file of files) {
+      const result = await uploadFile(file, store.sessionId);
+      store.addFile(result);
+    }
+  } catch (e) {
+    alert('Error uploading files: ' + e);
+  } finally {
+    store.setUploading(false);
   }
 }
 
-async function handleDrop(e) {
-  const files = e.dataTransfer.files;
-  if (!files) return;
-  
-  Array.from(files).forEach(async (file) => {
-    const result = await uploadFile(file, store.sessionId);
-    store.addFile(result);
-  });
-}
-
-async function move(index, direction) {
+async function move(index: number, direction: 'up' | 'down') {
   store.moveFile(index, direction);
   await updateOrder(store.sessionId, store.files.map(f => f.id));
 }
 
-async function removeFile(index) {
-  store.files.splice(index, 1);
+async function removeFile(index: number) {
+  store.removeFile(index);
   await updateOrder(store.sessionId, store.files.map(f => f.id));
 }
 
 async function generatePdf() {
   const url = getPdfUrl(store.sessionId);
-  window.location.href = url;
+  window.open(url, '_blank');
 }
 </script>

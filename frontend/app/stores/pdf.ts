@@ -1,14 +1,27 @@
 import { defineStore } from 'pinia';
+import type { FileInfo } from '../../../backend/src/types/index';
 
 export const usePdfStore = defineStore('pdf', {
   state: () => ({
-    sessionId: 'session-123', // In real app, generate this
-    files: [] as any[],
+    sessionId: '',
+    files: [] as FileInfo[],
     isUploading: false,
   }),
   actions: {
-    setFiles(files: any[]) {
+    initSession() {
+      if (this.sessionId) return;
+      // Simple UUID v4 simulation for frontend
+      this.sessionId = crypto.randomUUID();
+      localStorage.setItem('pdf_magic_session', this.sessionId);
+    },
+    setFiles(files: FileInfo[]) {
       this.files = files;
+    },
+    addFile(file: FileInfo) {
+      this.files.push(file);
+    },
+    removeFile(index: number) {
+      this.files.splice(index, 1);
     },
     moveFile(index: number, direction: 'up' | 'down') {
       const newFiles = [...this.files];
@@ -18,8 +31,8 @@ export const usePdfStore = defineStore('pdf', {
       [newFiles[index], newFiles[targetIndex]] = [newFiles[targetIndex], newFiles[index]];
       this.files = newFiles;
     },
-    addFile(file: any) {
-      this.files.push(file);
+    setUploading(val: boolean) {
+      this.isUploading = val;
     }
   },
 });
