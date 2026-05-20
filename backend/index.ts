@@ -11,7 +11,7 @@ import { VALID_SESSION_ID_REGEX } from './src/types/index.js';
 const app = new Hono();
 
 app.use('*', cors({
-  origin: 'http://localhost:3000', // Restrict to frontend
+  origin: 'http://localhost:3000',
 }));
 
 const storage = new LocalStorageService();
@@ -65,7 +65,8 @@ app.get('/generate', sessionMiddleware, async (c) => {
   const state = await order.getOrder(sessionId);
   try {
     const pdfBuffer = await pdf.generatePdf(state.fileIds);
-    return c.body(pdfBuffer, {
+    // FIX: Correct c.body signature (data, status, headers)
+    return c.body(pdfBuffer, 200, {
       'Content-Type': 'application/pdf',
       'Content-Disposition': 'attachment; filename="result.pdf"',
     });
@@ -74,8 +75,9 @@ app.get('/generate', sessionMiddleware, async (c) => {
   }
 });
 
+// FIX: root set to process.cwd() so that '/uploads/files/...' resolves correctly
 app.use('/uploads/files/*', serveStaticNode({ 
-  root: path.join(process.cwd(), 'uploads') 
+  root: process.cwd() 
 }));
 
 serve({

@@ -101,15 +101,15 @@ onMounted(() => {
 async function fetchCurrentFiles() {
   try {
     const state = await useApi().getFiles(store.sessionId);
-    // In a full MVP, we would fetch metadata for each ID.
-    // For now, we restore the count or a simple list.
-    // Since backend only stores IDs in KV, the frontend needs to handle its own mapping 
-    // or backend should store a map.
-    // To satisfy the review, we'll at least trigger the fetch.
-    console.log('Session restored, files count:', state.fileIds.length);
+    // To restore the list with names/types, we would need the backend 
+    // to store a map of ID -> FileInfo. 
+    // For this MVP, we acknowledge the session exists.
+    console.log('Session restored, found', state.fileIds.length, 'files');
   } catch (e) {
     console.error('Failed to restore session files', e);
   }
+}
+
 }
 
 
@@ -156,6 +156,9 @@ async function removeFile(index: number) {
 
 async function generatePdf() {
   const url = getPdfUrl(store.sessionId);
-  window.open(url, '_blank');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'result.pdf';
+  a.click();
 }
 </script>

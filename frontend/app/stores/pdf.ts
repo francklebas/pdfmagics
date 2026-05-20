@@ -10,10 +10,10 @@ export const usePdfStore = defineStore('pdf', {
   actions: {
     initSession() {
       if (this.sessionId) return;
-      // Simple UUID v4 simulation for frontend
-      this.sessionId = crypto.randomUUID();
+      this.sessionId = localStorage.getItem('pdf_magic_session') || crypto.randomUUID();
       localStorage.setItem('pdf_magic_session', this.sessionId);
     },
+
     setFiles(files: FileInfo[]) {
       this.files = files;
     },

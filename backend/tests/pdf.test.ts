@@ -1,7 +1,7 @@
 import { expect, test, describe, beforeEach, afterAll } from 'bun:test';
 import { PdfService } from '../src/services/pdf.service.js';
 import { LocalStorageService } from '../src/services/storage.service.js';
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import path from 'node:path';
 
 describe('PdfService', () => {
@@ -10,7 +10,7 @@ describe('PdfService', () => {
   const testDir = path.join(process.cwd(), 'tests/temp_uploads');
 
   beforeEach(async () => {
-    if (!require('fs').existsSync(testDir)) {
+    if (!existsSync(testDir)) {
       mkdirSync(testDir, { recursive: true });
     }
     storage = new LocalStorageService();
