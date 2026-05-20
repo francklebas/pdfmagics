@@ -1,106 +1,187 @@
 # Code Review — `pdfmagics`
 
-> Date : 2026-05-20 (rev 2 — état actuel après corrections)
+> Date : 2026-05-20 — rev 3
 
 ## Vue d'ensemble
 
-Le gros des problèmes bloquants signalés en rev 1 est résolu : le serveur Hono est câblé, la session est générée par UUID côté client, la validation du `sessionId` est en place, la limite de taille de fichier existe, la détection par magic bytes dans `pdf.service.ts` est là. L'architecture tient la route pour un MVP.
-
-Ce qui suit sont les points encore ouverts.
+Architecture globalement saine pour un MVP : séparation des services, interfaces swappables pour Cloudflare, validation des inputs. Plusieurs bugs bloquants ont été identifiés dans cette passe — ils sont rapides à corriger.
 
 ---
 
-## Backend
+## Bugs bloquants
 
-### `backend/index.ts` (racine)
-Toujours `console.log("Hello via Bun!")`. La racine est ignorée en pratique (le README pointe vers `src/index.ts`) mais c'est trompeur. À supprimer ou à rediriger.
+### 1. Méthode `saveFile` dupliquée avec première implémentation incomplète
+**Fichier :** `backend/src/services/storage.service.ts:28-68`
 
-### Adapter Node au lieu de Bun (`src/index.ts`)
+Deux déclarations de `saveFile` dans la même classe. La première est incomplète (pas de `return`) et TypeScript rejettera le fichier à la compilation.
+
 ```ts
-import { serveStatic as serveStaticNode } from '@hono/node-server/serve-static';
-import { serve } from '@hono/node-server';
+// ligne 28 — incomplète, à supprimer
+async saveFile(file: File): Promise<FileInfo> {
+  await this.ensureDir();
+  if (file.size > this.MAX_FILE_SIZE) { ... }
+  // pas de return
+}
+
+// ligne 44 — implémentation réelle
+async saveFile(file: File): Promise<FileInfo> { ... }
 ```
-Le CLAUDE.md demande `Bun.serve()`. Le serveur tourne via `@hono/node-server` et `node:fs/promises` est utilisé partout dans les services. Ce n'est pas bloquant pour un MVP local mais c'est en contradiction avec le setup décidé.
-
-### `PUT /order` — `fileIds` non validé
-Le `sessionId` est bien validé mais `fileIds` n'est pas vérifié : pas de contrôle que c'est un tableau, ni que les entrées sont des UUIDs valides. Un payload malformé (`fileIds: "foo"`) passe sans erreur.
-
-### `storage.service.ts` — O(n) sur chaque lookup
-`getFile()` et `deleteFile()` font un `readdir()` complet pour retrouver un fichier par préfixe UUID. Stocker le chemin complet dans `FileInfo.url` (déjà présent) et le réutiliser résoudrait ça sans changement d'interface.
-
-### `storage.service.ts` / `order.service.ts` — magic bytes vs formats supportés
-`detectType()` accepte JPEG, PNG, GIF, WebP, PDF. Mais `pdf.service.ts` ne gère que JPEG et PNG parmi les images — GIF et WebP passent le filtre d'upload et sont silencieusement ignorés lors de la génération. À aligner : soit `detectType` restreint aux formats réellement gérés, soit `pdf.service` les traite.
-
-### `order.service.ts` — race condition dans `addFile()`
-Lecture puis écriture non atomiques. Deux uploads simultanés sur la même session peuvent causer une perte de mise à jour. Acceptable pour MVP monoutilisateur, à noter pour la migration KV (qui aura des primitives atomiques).
-
-### Pas de TTL ni de nettoyage
-Les fichiers uploadés et les sessions JSON s'accumulent indéfiniment. À traiter avant prod.
-
-### `cors()` sans restriction d'origine
-Toutes les origines sont acceptées. À restreindre avant prod.
 
 ---
 
-## Frontend
+### 2. `require()` dans un module ESM
+**Fichier :** `backend/tests/pdf.test.ts:13`
 
-### `<script setup>` sans `lang="ts"` (`index.vue`)
-Le composant principal n'a pas TypeScript actif malgré un projet TS.
-
-### Import cross-boundary dans le store
-```ts
-// stores/pdf.ts
-import type { FileInfo } from '../../../backend/src/types/index';
-```
-Ça fonctionne en dev monorepo mais cassera en prod (le frontend ne verra pas le backend). Dupliquer ou extraire le type dans un package partagé.
-
-### `fetchCurrentFiles()` vide
-La session est bien restaurée depuis `localStorage` au montage, mais les fichiers ne sont jamais rechargés depuis le backend. L'utilisateur repart d'une liste vide à chaque refresh même si des fichiers existent côté serveur.
-
-### Erreurs API peu informatives (`useApi.ts`)
-```ts
-throw new Error(`Upload failed: ${res.statusText}`);
-```
-`statusText` est souvent vide (Cloudflare, Nginx, Bun). Préférer `res.json()` pour récupérer le message d'erreur retourné par le serveur.
-
----
-
-## Tests
-
-### `pdf.test.ts` — `require()` dans un contexte ESM
 ```ts
 if (!require('fs').existsSync(testDir)) {
 ```
-Mélange CommonJS dans un projet ESM. Utiliser `import { existsSync } from 'node:fs'`.
 
-### `pdf.test.ts` — `rmDirSync` déprécié
-`rmDirSync` est déprécié. Utiliser `rmSync(testDir, { recursive: true })`.
+`require` n'est pas défini en ESM. Ce test lève `ReferenceError: require is not defined`. `existsSync` est déjà importé depuis `node:fs` plus haut dans le fichier.
 
-### `pdf.test.ts` — pas de nettoyage après les tests
-Les fichiers créés dans `tests/temp_uploads/` persistent après l'exécution. Ajouter un `afterEach` ou `afterAll`.
+---
 
-### `pdf.test.ts` — contournement de l'encapsulation
+### 3. E2E : `waitForEvent('download')` ne se déclenchera jamais
+**Fichier :** `frontend/tests/pdfmagics.spec.ts:34-38`
+
+```ts
+const downloadPromise = page.waitForEvent('download');
+await page.click('text=Generate PDF');
+```
+
+Le frontend appelle `window.open(url, '_blank')` — cela ouvre un onglet, pas un téléchargement. L'événement `download` Playwright ne se déclenche pas. Le rapport d'échec dans `playwright-report/` le confirme.
+
+---
+
+### 4. Mauvaise signature de `c.body()` dans Hono
+**Fichiers :** `backend/src/index.ts:71-73`, `backend/index.ts:68-71`
+
+```ts
+return c.body(pdfBuffer, {
+  'Content-Type': 'application/pdf',
+  'Content-Disposition': 'attachment; filename="result.pdf"',
+});
+```
+
+La signature est `c.body(data, status, headers)`. L'objet passé en deuxième argument est interprété comme un statut — le Content-Type et le Content-Disposition ne sont pas envoyés.
+
+```ts
+// correct
+return c.body(pdfBuffer, 200, {
+  'Content-Type': 'application/pdf',
+  'Content-Disposition': 'attachment; filename="result.pdf"',
+});
+```
+
+---
+
+## Bugs notables
+
+### 5. Session non restaurée au rechargement de page
+**Fichier :** `frontend/app/stores/pdf.ts:11-15`
+
+```ts
+initSession() {
+  if (this.sessionId) return;
+  this.sessionId = crypto.randomUUID();
+  localStorage.setItem('pdf_magic_session', this.sessionId);
+},
+```
+
+La valeur est sauvegardée dans `localStorage` mais jamais relue. Chaque rechargement génère un nouvel UUID et les fichiers uploadés sont perdus.
+
+```ts
+initSession() {
+  if (this.sessionId) return;
+  this.sessionId = localStorage.getItem('pdf_magic_session') ?? crypto.randomUUID();
+  localStorage.setItem('pdf_magic_session', this.sessionId);
+},
+```
+
+---
+
+### 6. `serveStatic` — résolution de chemin incorrecte
+**Fichier :** `backend/src/index.ts:81-83`
+
+```ts
+app.use('/uploads/files/*', serveStaticNode({ 
+  root: path.join(process.cwd(), 'uploads') 
+}));
+```
+
+Hono concatène `root` + le path complet de la requête. Le fichier est cherché à `<cwd>/uploads/uploads/files/<filename>`. La `root` devrait être `process.cwd()` pour que `/uploads/files/<filename>` se résolve correctement.
+
+---
+
+### 7. `GIF`/`WebP` acceptés au stockage mais ignorés à la génération
+**Fichiers :** `backend/src/services/storage.service.ts:36-41`, `backend/src/services/pdf.service.ts`
+
+`detectType()` accepte JPEG, PNG (et potentiellement d'autres formats). `PdfService` ne gère que JPEG et PNG — les autres formats passent l'upload et sont silencieusement ignorés lors de la génération PDF. À aligner.
+
+---
+
+### 8. `fetchCurrentFiles()` ne restaure pas l'état
+**Fichier :** `frontend/app/pages/index.vue:101-113`
+
+La fonction récupère les IDs depuis le serveur mais ne les injecte pas dans le store. Le backend ne stocke que les IDs, pas les métadonnées (`name`, `type`, `size`). Pour une vraie restauration, le backend doit stocker les `FileInfo` complets ou le frontend doit les persister en localStorage.
+
+---
+
+### 9. Import de type backend→frontend
+**Fichier :** `frontend/app/stores/pdf.ts` (si présent)
+
+Un import direct depuis le package backend fonctionnes en dev monorepo mais cassera en production (le frontend n'a pas accès aux sources backend). Les types partagés doivent être dupliqués ou extraits dans un package commun.
+
+---
+
+## Qualité du code
+
+### 10. Deux `index.ts` pour le backend — versions divergentes
+`backend/index.ts` (CORS restreint à localhost:3000) et `backend/src/index.ts` (CORS wildcard) sont deux versions du même serveur. Le README pointe sur `src/index.ts`. À consolider en un seul fichier.
+
+### 11. `frontend/index.ts` — fichier placeholder inutile
+```ts
+console.log("Hello via Bun!");
+```
+Fichier orphelin sans rapport avec l'app Nuxt. À supprimer.
+
+### 12. `VALID_SESSION_ID_REGEX` trop permissif
+**Fichier :** `backend/src/types/index.ts:13`
+
+`/^[0-9a-f-]{36}$/` accepte `------------------------------------`. Un regex UUID strict serait plus sûr :
+```ts
+/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+```
+
+### 13. `ensureDir()` fire-and-forget dans les constructeurs
+`ensureDir()` est appelé dans le constructeur sans `await` (impossible en constructeur). Si une requête arrive avant la fin de la création du répertoire, l'écriture échouera. Le re-appel dans `saveFile()` mitigue partiellement pour le storage, mais pas pour `LocalOrderService`.
+
+### 14. Accès aux champs privés par cast `any` dans les tests
 ```ts
 (storage as any).uploadDir = testDir;
 ```
-Fragile : tout renommage interne casse le test sans erreur de compilation.
+Tout renommage interne casse le test sans erreur de compilation. Un paramètre de constructeur serait plus robuste.
 
-### `integration.test.ts` — écrit dans `uploads/` de prod
-Les tests d'intégration utilisent le répertoire réel, pas un répertoire isolé. Ils polluent l'état de dev et peuvent interférer avec un serveur tournant localement.
+### 15. Artefacts Playwright commités
+`frontend/playwright-report/` et `frontend/test-results/` sont trackés en git. À ajouter au `.gitignore`.
+
+---
+
+## Points déjà identifiés (revs précédentes)
+
+| Point | Statut |
+|---|---|
+| `PUT /order` — `fileIds` non validé | Corrigé en rev 2 |
+| Race condition dans `addFile()` | Connu, acceptable pour MVP |
+| Pas de TTL / nettoyage | Connu, à traiter avant prod |
+| `getFile()` O(n) readdir | Connu, non bloquant pour MVP |
+| `cors()` toutes origines dans `src/index.ts` | Toujours présent |
 
 ---
 
 ## Résumé
 
-| Priorité | Problème |
-|----------|----------|
-| Haute    | GIF/WebP acceptés au stockage mais silencieusement ignorés à la génération |
-| Haute    | `fetchCurrentFiles()` vide — état non restauré au refresh |
-| Haute    | Import type backend→frontend — cassera en prod |
-| Moyenne  | `fileIds` non validé sur `PUT /order` |
-| Moyenne  | `require()` dans les tests ESM |
-| Moyenne  | Tests d'intégration polluent `uploads/` |
-| Basse    | `readdir()` O(n) sur chaque lookup |
-| Basse    | Pas de TTL / nettoyage |
-| Basse    | `cors()` toutes origines |
-| Basse    | `backend/index.ts` racine obsolète |
+| Sévérité | Nombre |
+|---|---|
+| Bloquant (compile/runtime cassé) | 4 |
+| Bug notable (comportement incorrect) | 5 |
+| Qualité / nettoyage | 6 |
